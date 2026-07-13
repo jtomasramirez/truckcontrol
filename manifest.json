@@ -1,0 +1,21 @@
+{
+  "name": "Control de Camiones - GRIT",
+  "short_name": "Control Camiones",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#232326",
+  "theme_color": "#e8600c",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
