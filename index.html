@@ -2570,14 +2570,18 @@ async function init(){
   });
   document.getElementById('salePatente').addEventListener('change', checkFrequentClient);
 
-  // Ahora sí, cargar los datos. Mientras tanto la pantalla de "Cargando..." tapa todo.
+  // Ahora sí, cargar los datos — todo en paralelo para que sea más rápido.
   try{
-    await loadTrucks();
-    await loadMaterials();
-    await loadUsers();
-    await loadSettings();
-    todayEntries = await loadEntries(todayKey);
-    todaySales = await loadSales(todayKey);
+    const [, , , , entriesResult, salesResult] = await Promise.all([
+      loadTrucks(),
+      loadMaterials(),
+      loadUsers(),
+      loadSettings(),
+      loadEntries(todayKey),
+      loadSales(todayKey)
+    ]);
+    todayEntries = entriesResult;
+    todaySales = salesResult;
   }catch(e){
     console.error('Error cargando datos iniciales:', e);
   }
