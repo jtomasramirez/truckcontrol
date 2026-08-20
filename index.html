@@ -659,9 +659,11 @@
       <div id="truckEditList"></div>
       <div class="row" style="margin-top:10px;">
         <input type="text" id="newTruckName" placeholder="Nombre (ej: Kenworth verde)">
+        <input type="text" id="newTruckPatente" placeholder="Patente (opcional)" style="width:110px;text-transform:uppercase;">
         <input type="color" id="newTruckColor" value="#e8600c">
         <select id="newTruckClient" style="background:var(--asphalt);color:var(--concrete);border:1px solid var(--line);padding:8px 10px;border-radius:6px;"></select>
         <button class="btn-primary" id="addTruckBtn">Agregar</button>
+        <button class="btn-flat" id="cancelTruckEditBtn" style="display:none;">Cancelar edición</button>
       </div>
       <button class="btn-flat" id="changePinBtn" style="margin-top:10px;">Cambiar PIN de Resumen</button>
       <p class="muted">Si dos camiones son iguales en marca y color (como tus dos Scania rojos), agrégalos como camiones separados (ej. "Scania rojo #1" y "Scania rojo #2") y pon un número visible pegado en el parabrisas o la puerta para que el portero sepa cuál es cuál.</p>
@@ -1095,7 +1097,7 @@ function guideHTMLForEntry(e){
       <p style="color:#555;margin:0 0 14px;">Material integral · Áridos y rocas</p>
       <p><b>Fecha:</b> ${fecha.toLocaleDateString('es-CL')} ${fecha.toLocaleTimeString('es-CL',{hour:'2-digit',minute:'2-digit'})}</p>
       <p><b>Cliente:</b> ${cliente.name || '—'}</p>
-      <p><b>Camión:</b> ${t.name}</p>
+      <p><b>Camión:</b> ${t.name}${t.patente ? ' — '+t.patente : ''}</p>
       <table style="width:100%;border-collapse:collapse;margin-top:12px;">
         <tr><td style="padding:4px 0;">Material</td><td style="text-align:right;">Material integral</td></tr>
         <tr><td style="padding:4px 0;">Cantidad</td><td style="text-align:right;">${M3_PER_TRUCK} m³</td></tr>
@@ -2476,21 +2478,28 @@ function addUser(){
   saveUsers();
 }
 
+let editingTruckId = null;
+
 function renderTruckEditList(){
   const wrap = document.getElementById('truckEditList');
   wrap.innerHTML = '';
   trucks.forEach(t=>{
     const c = materialClientById(t.clientId);
+    const patenteTxt = t.patente ? ' · <span class="muted">'+t.patente+'</span>' : '';
     const row = document.createElement('div');
     row.className = 'truck-edit-row';
-    row.innerHTML = `<span class="swatch-dot" style="background:${t.color}"></span><span class="name">${t.name} <span class="muted">(${c.name})</span></span><button class="icon-btn" data-id="${t.id}">✕</button>`;
+    row.innerHTML = `<span class="swatch-dot" style="background:${t.color}"></span><span class="name">${t.name}${patenteTxt} <span class="muted">(${c.name})</span></span><button class="icon-btn edit-truck-btn" data-id="${t.id}" style="color:var(--concrete-dim);">✎</button><button class="icon-btn" data-id="${t.id}">✕</button>`;
     wrap.appendChild(row);
   });
-  wrap.querySelectorAll('.icon-btn').forEach(btn=>{
+  wrap.querySelectorAll('.edit-truck-btn').forEach(btn=>{
+    btn.addEventListener('click', ()=>startEditTruck(btn.getAttribute('data-id')));
+  });
+  wrap.querySelectorAll('.icon-btn:not(.edit-truck-btn)').forEach(btn=>{
     btn.addEventListener('click', async ()=>{
       const id = btn.getAttribute('data-id');
       if(await showConfirmDialog('¿Quitar este camión de la lista?')){
         trucks = trucks.filter(t=>t.id!==id);
+        if(editingTruckId===id) cancelEditTruck();
         renderTruckEditList();
         renderGrid();
         saveTrucks();
@@ -2505,19 +2514,54 @@ function populateNewTruckClientSelect(){
   sel.innerHTML = materialClients.map(c=>`<option value="${c.id}">${c.name}</option>`).join('');
 }
 
+function startEditTruck(id){
+  const t = trucks.find(x=>x.id===id);
+  if(!t) return;
+  editingTruckId = id;
+  document.getElementById('newTruckName').value = t.name;
+  document.getElementById('newTruckPatente').value = t.patente || '';
+  document.getElementById('newTruckColor').value = t.color;
+  populateNewTruckClientSelect();
+  document.getElementById('newTruckClient').value = t.clientId || '';
+  document.getElementById('addTruckBtn').textContent = 'Guardar cambios';
+  document.getElementById('cancelTruckEditBtn').style.display = '';
+  document.getElementById('newTruckName').scrollIntoView({behavior:'smooth', block:'center'});
+}
+
+function cancelEditTruck(){
+  editingTruckId = null;
+  document.getElementById('newTruckName').value = '';
+  document.getElementById('newTruckPatente').value = '';
+  document.getElementById('newTruckColor').value = '#e8600c';
+  document.getElementById('addTruckBtn').textContent = 'Agregar';
+  document.getElementById('cancelTruckEditBtn').style.display = 'none';
+}
+
 function addTruck(){
   const nameInput = document.getElementById('newTruckName');
+  const patenteInput = document.getElementById('newTruckPatente');
   const colorInput = document.getElementById('newTruckColor');
   const clientInput = document.getElementById('newTruckClient');
   const name = nameInput.value.trim();
+  const patente = patenteInput.value.trim().toUpperCase();
   if(!name){ showToast('Escribe un nombre'); return; }
   if(materialClients.length===0){ showToast('Primero agrega un cliente de Material integral'); return; }
-  const id = 'truck_'+Date.now();
-  trucks.push({id, name, color:colorInput.value, clientId: clientInput.value});
-  nameInput.value = '';
+
+  if(editingTruckId){
+    const t = trucks.find(x=>x.id===editingTruckId);
+    if(t){
+      t.name = name; t.patente = patente; t.color = colorInput.value; t.clientId = clientInput.value;
+      showToast('Camión actualizado');
+    }
+    cancelEditTruck();
+  }else{
+    const id = 'truck_'+Date.now();
+    trucks.push({id, name, patente, color:colorInput.value, clientId: clientInput.value});
+    nameInput.value = ''; patenteInput.value = '';
+    showToast('Camión agregado');
+  }
   renderTruckEditList();
   renderGrid();
-  showToast('Camión agregado');
   saveTrucks();
 }
 
@@ -2693,6 +2737,7 @@ async function init(){
   document.getElementById('exportCsv').addEventListener('click', exportCsv);
   document.getElementById('exportSalesCsv').addEventListener('click', exportSalesCsv);
   document.getElementById('addTruckBtn').addEventListener('click', addTruck);
+  document.getElementById('cancelTruckEditBtn').addEventListener('click', cancelEditTruck);
   document.getElementById('addUserBtn').addEventListener('click', addUser);
   document.getElementById('runAuditBtn').addEventListener('click', runAudit);
   document.getElementById('addExpenseBtn').addEventListener('click', addExpense);
