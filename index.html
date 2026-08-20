@@ -465,6 +465,10 @@
         <input type="number" id="salePrice" placeholder="Precio/m³" step="1" min="0" style="width:130px;">
         <span class="muted">Total: <b id="saleTotal" style="color:var(--safety);">$0</b></span>
       </div>
+      <div class="row" id="saleTimeRow" style="display:none;">
+        <label class="muted" style="font-size:0.78rem;">Hora de la venta (editable)</label>
+        <input type="time" id="saleTimeInput" style="background:var(--asphalt);border:1px solid var(--line);color:var(--safety);font-family:'JetBrains Mono',monospace;padding:8px;border-radius:6px;text-align:center;font-size:1rem;width:120px;">
+      </div>
       <div class="row">
         <button class="btn-flat" id="paySwitch" data-pay="efectivo" style="border-color:var(--ok);color:var(--ok);">💵 Efectivo</button>
         <input type="text" id="saleNote" placeholder="Nota adicional (opcional)" style="flex:1;min-width:140px;">
@@ -753,10 +757,10 @@ let todayKey = '';
 let workingDate = '';
 let currentShift = null;
 
-function workingNow(){
+function workingNow(timeInputId){
   if(workingDate === todayKey) return new Date();
   const [y,m,d] = workingDate.split('-').map(Number);
-  const timeInput = document.getElementById('confirmTimeInput');
+  const timeInput = document.getElementById(timeInputId || 'confirmTimeInput');
   if(timeInput && timeInput.value){
     const [hh,mm] = timeInput.value.split(':').map(Number);
     return new Date(y, m-1, d, hh, mm, 0);
@@ -776,6 +780,15 @@ function updateWorkingDateUI(){
   const salesTitle = document.getElementById('salesFeedTitle');
   if(truckTitle) truckTitle.textContent = 'Vueltas '+label+' (con horario)';
   if(salesTitle) salesTitle.textContent = 'Ventas '+label;
+  document.getElementById('saleTimeRow').style.display = isHistoric ? 'flex' : 'none';
+  resetSaleTimeInput();
+}
+
+function resetSaleTimeInput(){
+  const input = document.getElementById('saleTimeInput');
+  if(!input) return;
+  const now = new Date();
+  input.value = pad(now.getHours())+':'+pad(now.getMinutes());
 }
 
 async function switchWorkingDate(newDate){
@@ -1618,7 +1631,7 @@ async function registerSale(){
   }
   const material = materialById(materialId);
   const {neto, iva, total} = calcSaleAmounts(m3, price, currentPay);
-  const when = workingNow();
+  const when = workingNow('saleTimeInput');
   const sale = {
     time: when.toISOString(),
     materialId, m3, price, neto, iva, total,
@@ -1644,6 +1657,7 @@ async function registerSale(){
   const photoToUpload = lastPhotoThumb;
   lastPhotoThumb = null;
   updateSaleTotal();
+  resetSaleTimeInput();
   showToast('Venta registrada: $'+sale.total.toLocaleString('es-CL')+(workingDate!==todayKey ? ' ('+fmtDateLabel(workingDate)+')' : ''));
 
   // Todo lo que necesita red corre de fondo, sin bloquear la interfaz
