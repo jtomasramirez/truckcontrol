@@ -722,6 +722,11 @@ const sheetsStorage = {
     const res = await fetchWithTimeout(SHEETS_URL + '?action=list&prefix=' + encodeURIComponent(prefix||''));
     const data = await res.json();
     return data; // {keys}
+  },
+  async listValues(prefix){
+    const res = await fetchWithTimeout(SHEETS_URL + '?action=listValues&prefix=' + encodeURIComponent(prefix||''));
+    const data = await res.json();
+    return data; // {items: [{key, value}]}
   }
 };
 /* ======================================================================= */
@@ -958,14 +963,16 @@ function getWeekDateKeys(weekStr){
 }
 async function getWeekEntries(weekStr){
   const keys = getWeekDateKeys(weekStr);
+  const perDay = await Promise.all(keys.map(k=>loadEntries(k)));
   let all = [];
-  for(const k of keys){ all = all.concat(await loadEntries(k)); }
+  perDay.forEach(dayEntries=>{ all = all.concat(dayEntries); });
   return all;
 }
 async function getWeekSales(weekStr){
   const keys = getWeekDateKeys(weekStr);
+  const perDay = await Promise.all(keys.map(k=>loadSales(k)));
   let all = [];
-  for(const k of keys){ all = all.concat(await loadSales(k)); }
+  perDay.forEach(daySales=>{ all = all.concat(daySales); });
   return all;
 }
 
@@ -1820,21 +1827,16 @@ async function renderDayDetail(key){
 }
 
 async function getMonthEntries(monthKey){
-  let keys = [];
+  let items = [];
   try{
-    const res = await sheetsStorage.list('entries:'+monthKey, true);
-    keys = res ? res.keys : [];
-  }catch(e){ flagReadError(e); keys = []; }
+    const res = await sheetsStorage.listValues('entries:'+monthKey);
+    items = (res && Array.isArray(res.items)) ? res.items : [];
+  }catch(e){ flagReadError(e); items = []; }
   let all = [];
-  for(const k of keys){
-    try{
-      const res = await sheetsStorage.get(k, true);
-      if(res){
-        const arr = JSON.parse(res.value);
-        all = all.concat(arr);
-      }
-    }catch(e){ flagReadError(e); }
-  }
+  items.forEach(item=>{
+    try{ all = all.concat(JSON.parse(item.value)); }
+    catch(e){ flagReadError(e); }
+  });
   return all;
 }
 
@@ -2064,18 +2066,16 @@ async function renderIntegralReceivable(monthKey){
 
 
 async function getMonthSales(monthKey){
-  let keys = [];
+  let items = [];
   try{
-    const res = await sheetsStorage.list('sales:'+monthKey, true);
-    keys = res ? res.keys : [];
-  }catch(e){ flagReadError(e); keys = []; }
+    const res = await sheetsStorage.listValues('sales:'+monthKey);
+    items = (res && Array.isArray(res.items)) ? res.items : [];
+  }catch(e){ flagReadError(e); items = []; }
   let all = [];
-  for(const k of keys){
-    try{
-      const res = await sheetsStorage.get(k, true);
-      if(res) all = all.concat(JSON.parse(res.value));
-    }catch(e){ flagReadError(e); }
-  }
+  items.forEach(item=>{
+    try{ all = all.concat(JSON.parse(item.value)); }
+    catch(e){ flagReadError(e); }
+  });
   return all;
 }
 
@@ -2102,18 +2102,16 @@ async function saveExpenses(key, arr){
   if(!ok) showToast('No se pudo guardar el gasto, revisa tu conexión');
 }
 async function getMonthExpenses(monthKey){
-  let keys = [];
+  let items = [];
   try{
-    const res = await sheetsStorage.list('gastos:'+monthKey, true);
-    keys = res ? res.keys : [];
-  }catch(e){ flagReadError(e); keys = []; }
+    const res = await sheetsStorage.listValues('gastos:'+monthKey);
+    items = (res && Array.isArray(res.items)) ? res.items : [];
+  }catch(e){ flagReadError(e); items = []; }
   let all = [];
-  for(const k of keys){
-    try{
-      const res = await sheetsStorage.get(k, true);
-      if(res) all = all.concat(JSON.parse(res.value));
-    }catch(e){ flagReadError(e); }
-  }
+  items.forEach(item=>{
+    try{ all = all.concat(JSON.parse(item.value)); }
+    catch(e){ flagReadError(e); }
+  });
   return all;
 }
 
