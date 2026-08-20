@@ -660,6 +660,7 @@
       <div class="row" style="margin-top:10px;">
         <input type="text" id="newTruckName" placeholder="Nombre (ej: Kenworth verde)">
         <input type="text" id="newTruckPatente" placeholder="Patente (opcional)" style="width:110px;text-transform:uppercase;">
+        <input type="number" id="newTruckM3" placeholder="m³/vuelta" step="0.5" min="0" style="width:100px;">
         <input type="color" id="newTruckColor" value="#e8600c">
         <select id="newTruckClient" style="background:var(--asphalt);color:var(--concrete);border:1px solid var(--line);padding:8px 10px;border-radius:6px;"></select>
         <button class="btn-primary" id="addTruckBtn">Agregar</button>
@@ -1096,7 +1097,8 @@ function guideHTMLForEntry(e){
   const cliente = materialClientById(t.clientId);
   const fecha = new Date(e.time);
   const price = cliente.price || 0;
-  const total = M3_PER_TRUCK * price;
+  const m3 = truckM3(t);
+  const total = m3 * price;
   return `
     <div style="padding:22px;font-family:Arial,sans-serif;">
       <img src="${LOGO_DATA_URI}" style="height:44px;display:block;margin-bottom:14px;">
@@ -1107,7 +1109,7 @@ function guideHTMLForEntry(e){
       <p><b>Camión:</b> ${t.name}${t.patente ? ' — '+t.patente : ''}</p>
       <table style="width:100%;border-collapse:collapse;margin-top:12px;">
         <tr><td style="padding:4px 0;">Material</td><td style="text-align:right;">Material integral</td></tr>
-        <tr><td style="padding:4px 0;">Cantidad</td><td style="text-align:right;">${M3_PER_TRUCK} m³</td></tr>
+        <tr><td style="padding:4px 0;">Cantidad</td><td style="text-align:right;">${m3} m³</td></tr>
         <tr><td style="padding:4px 0;">Precio / m³</td><td style="text-align:right;">$${price.toLocaleString('es-CL')}</td></tr>
         <tr style="font-weight:bold;border-top:1px solid #ccc;"><td style="padding:6px 0;">Total</td><td style="text-align:right;">$${total.toLocaleString('es-CL')}</td></tr>
       </table>
@@ -1201,6 +1203,7 @@ async function saveEntries(key, entries){
 }
 
 function truckById(id){ return trucks.find(t=>t.id===id); }
+function truckM3(t){ return (t && t.m3) || M3_PER_TRUCK; }
 
 async function loadMaterials(){
   try{
@@ -1291,7 +1294,8 @@ function updateReadout(){
   const m3val = document.getElementById('todayM3');
   if(m3Unlocked){
     m3box.querySelector('.label').textContent = 'Total m³ hoy';
-    m3val.innerHTML = (todayEntries.length*M3_PER_TRUCK)+'<span class="unit">m³</span>';
+    const totalM3 = todayEntries.reduce((a,e)=>a+truckM3(truckById(e.truckId)),0);
+    m3val.innerHTML = totalM3+'<span class="unit">m³</span>';
   }else{
     m3box.querySelector('.label').textContent = 'Total m³ hoy 🔒';
     m3val.innerHTML = '•••';
@@ -1762,11 +1766,11 @@ function buildIntegralReport(entries){
     const t = truckById(id) || {name:id, color:'#888', clientId:''};
     const c = materialClientById(t.clientId);
     const count = counts[id];
-    const m3 = count*M3_PER_TRUCK;
+    const m3 = count*truckM3(t);
     return {name:t.name, color:t.color, count, m3, clientName:c.name, clientId:c.id, price:c.price||0, revenue: m3*(c.price||0)};
   }).sort((a,b)=>b.count-a.count);
   const totalCount = entries.length;
-  const totalM3 = totalCount*M3_PER_TRUCK;
+  const totalM3 = rows.reduce((a,r)=>a+r.m3,0);
   const totalRevenue = rows.reduce((a,r)=>a+r.revenue,0);
   const byClient = {};
   rows.forEach(r=>{
@@ -2486,7 +2490,7 @@ function renderTruckEditList(){
     const patenteTxt = t.patente ? ' · <span class="muted">'+t.patente+'</span>' : '';
     const row = document.createElement('div');
     row.className = 'truck-edit-row';
-    row.innerHTML = `<span class="swatch-dot" style="background:${t.color}"></span><span class="name">${t.name}${patenteTxt} <span class="muted">(${c.name})</span></span><button class="icon-btn edit-truck-btn" data-id="${t.id}" style="color:var(--concrete-dim);">✎</button><button class="icon-btn" data-id="${t.id}">✕</button>`;
+    row.innerHTML = `<span class="swatch-dot" style="background:${t.color}"></span><span class="name">${t.name}${patenteTxt} <span class="muted">(${c.name} · ${truckM3(t)} m³/vuelta)</span></span><button class="icon-btn edit-truck-btn" data-id="${t.id}" style="color:var(--concrete-dim);">✎</button><button class="icon-btn" data-id="${t.id}">✕</button>`;
     wrap.appendChild(row);
   });
   wrap.querySelectorAll('.edit-truck-btn').forEach(btn=>{
@@ -2518,6 +2522,7 @@ function startEditTruck(id){
   editingTruckId = id;
   document.getElementById('newTruckName').value = t.name;
   document.getElementById('newTruckPatente').value = t.patente || '';
+  document.getElementById('newTruckM3').value = truckM3(t);
   document.getElementById('newTruckColor').value = t.color;
   populateNewTruckClientSelect();
   document.getElementById('newTruckClient').value = t.clientId || '';
@@ -2530,6 +2535,7 @@ function cancelEditTruck(){
   editingTruckId = null;
   document.getElementById('newTruckName').value = '';
   document.getElementById('newTruckPatente').value = '';
+  document.getElementById('newTruckM3').value = '';
   document.getElementById('newTruckColor').value = '#e8600c';
   document.getElementById('addTruckBtn').textContent = 'Agregar';
   document.getElementById('cancelTruckEditBtn').style.display = 'none';
@@ -2538,24 +2544,27 @@ function cancelEditTruck(){
 function addTruck(){
   const nameInput = document.getElementById('newTruckName');
   const patenteInput = document.getElementById('newTruckPatente');
+  const m3Input = document.getElementById('newTruckM3');
   const colorInput = document.getElementById('newTruckColor');
   const clientInput = document.getElementById('newTruckClient');
   const name = nameInput.value.trim();
   const patente = patenteInput.value.trim().toUpperCase();
+  const m3Val = parseFloat(m3Input.value);
+  const m3 = (!isNaN(m3Val) && m3Val > 0) ? m3Val : M3_PER_TRUCK;
   if(!name){ showToast('Escribe un nombre'); return; }
   if(materialClients.length===0){ showToast('Primero agrega un cliente de Material integral'); return; }
 
   if(editingTruckId){
     const t = trucks.find(x=>x.id===editingTruckId);
     if(t){
-      t.name = name; t.patente = patente; t.color = colorInput.value; t.clientId = clientInput.value;
+      t.name = name; t.patente = patente; t.m3 = m3; t.color = colorInput.value; t.clientId = clientInput.value;
       showToast('Camión actualizado');
     }
     cancelEditTruck();
   }else{
     const id = 'truck_'+Date.now();
-    trucks.push({id, name, patente, color:colorInput.value, clientId: clientInput.value});
-    nameInput.value = ''; patenteInput.value = '';
+    trucks.push({id, name, patente, m3, color:colorInput.value, clientId: clientInput.value});
+    nameInput.value = ''; patenteInput.value = ''; m3Input.value = '';
     showToast('Camión agregado');
   }
   renderTruckEditList();
