@@ -532,6 +532,7 @@
         <input type="month" id="monthPicker">
         <button class="btn-primary" id="exportCsv">Descargar CSV</button>
       </div>
+      <div id="monthChartWrap" style="margin:6px 0 10px;"></div>
       <div id="monthTableWrap"></div>
       <div id="integralReceivableWrap" style="margin-top:12px;"></div>
     </div>
@@ -551,6 +552,7 @@
 
     <div class="panel">
       <h2>Ventas del mes</h2>
+      <div id="salesMonthChartWrap" style="margin-bottom:10px;"></div>
       <div id="salesMonthWrap"></div>
       <button class="btn-primary" id="exportSalesCsv" style="margin-top:10px;">Descargar CSV de ventas</button>
     </div>
@@ -568,6 +570,25 @@
     <div class="panel">
       <h2>Clientes frecuentes de maicillo</h2>
       <div id="clientsWrap"></div>
+    </div>
+
+    <div class="section-title">📄 Estados de cuenta</div>
+
+    <div class="panel">
+      <h2>Generar estado de cuenta por cliente</h2>
+      <div class="row">
+        <select id="stmtType" style="background:var(--asphalt);color:var(--concrete);border:1px solid var(--line);padding:8px 10px;border-radius:6px;">
+          <option value="integral">Material integral</option>
+          <option value="maicillo">Maicillo</option>
+        </select>
+        <select id="stmtClient" style="background:var(--asphalt);color:var(--concrete);border:1px solid var(--line);padding:8px 10px;border-radius:6px;flex:1;min-width:160px;"></select>
+        <input type="month" id="stmtMonth">
+      </div>
+      <div class="row">
+        <button class="btn-primary" id="stmtGenerateBtn">Ver / Imprimir</button>
+        <button class="btn-flat" id="stmtCsvBtn">Descargar CSV</button>
+      </div>
+      <p class="muted">Detalle mes a mes por cliente, listo para enviar y cuadrar cobros. En Maicillo solo aparecen clientes con datos de facturación (transferencia) cargados ese mes.</p>
     </div>
 
     <div class="section-title">💸 Gastos</div>
@@ -1844,11 +1865,52 @@ async function getMonthEntries(monthKey){
   return all;
 }
 
+function daysInMonth(monthKey){
+  const [y,m] = monthKey.split('-').map(Number);
+  return new Date(y, m, 0).getDate();
+}
+
+function renderBarChart(containerId, points, opts){
+  const el = document.getElementById(containerId);
+  if(!el) return;
+  opts = opts || {};
+  const fmt = opts.fmt || (v=>String(v));
+  if(points.length===0){ el.innerHTML = ''; return; }
+  const max = Math.max(1, ...points.map(p=>p.value));
+  const w = 320, h = 90;
+  const barGap = 2;
+  const barW = Math.max((w / points.length) - barGap, 1);
+  const showLabels = points.length <= 9;
+  let bars = '';
+  points.forEach((p,i)=>{
+    const bh = Math.round((p.value/max) * (h-20));
+    const x = i*(barW+barGap);
+    const y = (h-16)-bh;
+    bars += `<rect x="${x.toFixed(1)}" y="${y}" width="${barW.toFixed(1)}" height="${Math.max(bh,0)}" fill="var(--safety)" rx="1"><title>${p.label}: ${fmt(p.value)}</title></rect>`;
+    if(showLabels){
+      bars += `<text x="${(x+barW/2).toFixed(1)}" y="${h-4}" font-size="8" fill="var(--concrete-dim)" text-anchor="middle">${p.label}</text>`;
+    }
+  });
+  el.innerHTML = `<svg viewBox="0 0 ${w} ${h}" style="width:100%;height:76px;">${bars}</svg><p class="muted" style="font-size:0.72rem;margin:2px 0 0;">Máximo del período: ${fmt(max)}</p>`;
+}
+
+function renderMonthChart(monthKey, entries){
+  const nDays = daysInMonth(monthKey);
+  const counts = {};
+  entries.forEach(e=>{ const dk = dateKey(new Date(e.time)); counts[dk] = (counts[dk]||0)+1; });
+  const points = [];
+  for(let d=1; d<=nDays; d++){
+    points.push({label:String(d), value: counts[monthKey+'-'+pad(d)] || 0});
+  }
+  renderBarChart('monthChartWrap', points, {fmt:v=>v+' vueltas'});
+}
+
 async function renderMonthTable(monthKey){
   lastReadError = ''; updateReadErrorBanner();
   const wrap = document.getElementById('monthTableWrap');
   wrap.innerHTML = '<p class="muted">Cargando...</p>';
   const entries = await getMonthEntries(monthKey);
+  renderMonthChart(monthKey, entries);
   if(entries.length===0){
     wrap.innerHTML = '<p class="empty">Sin registros para este mes.</p>';
     return;
@@ -2357,11 +2419,23 @@ Responde en español, breve, en formato de lista con viñetas. Indica qué días
   }
 }
 
+function renderSalesMonthChart(monthKey, sales){
+  const nDays = daysInMonth(monthKey);
+  const totals = {};
+  sales.forEach(s=>{ const dk = dateKey(new Date(s.time)); totals[dk] = (totals[dk]||0)+s.total; });
+  const points = [];
+  for(let d=1; d<=nDays; d++){
+    points.push({label:String(d), value: Math.round(totals[monthKey+'-'+pad(d)] || 0)});
+  }
+  renderBarChart('salesMonthChartWrap', points, {fmt:v=>'$'+v.toLocaleString('es-CL')});
+}
+
 async function renderSalesMonthTable(monthKey){
   lastReadError = ''; updateReadErrorBanner();
   const wrap = document.getElementById('salesMonthWrap');
   wrap.innerHTML = '<p class="muted">Cargando...</p>';
   const sales = await getMonthSales(monthKey);
+  renderSalesMonthChart(monthKey, sales);
   renderSalesTable('salesMonthWrap', sales);
 }
 
@@ -2384,6 +2458,115 @@ async function exportSalesCsv(){
   const a = document.createElement('a');
   a.href = url;
   a.download = 'ventas-'+monthKey+'.csv';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+/* ---------- Estados de cuenta por cliente ---------- */
+
+async function refreshStatementClientOptions(){
+  const type = document.getElementById('stmtType').value;
+  const sel = document.getElementById('stmtClient');
+  if(type==='integral'){
+    if(materialClients.length===0){
+      sel.innerHTML = '<option value="">Sin clientes de Material integral</option>';
+    }else{
+      sel.innerHTML = materialClients.map(c=>`<option value="${c.id}">${c.name}</option>`).join('');
+    }
+    return;
+  }
+  sel.innerHTML = '<option value="">Cargando...</option>';
+  const monthKey = document.getElementById('stmtMonth').value || todayKey.slice(0,7);
+  const sales = await getMonthSales(monthKey);
+  const names = [...new Set(sales.filter(s=>s.billing && s.billing.razonSocial).map(s=>s.billing.razonSocial))].sort();
+  sel.innerHTML = names.length===0
+    ? '<option value="">Sin clientes con factura este mes</option>'
+    : names.map(n=>`<option value="${n}">${n}</option>`).join('');
+}
+
+async function buildStatementRows(type, clientKey, monthKey){
+  if(type==='integral'){
+    const client = materialClientById(clientKey);
+    const entries = await getMonthEntries(monthKey);
+    const rows = entries
+      .filter(e=>{ const t = truckById(e.truckId); return t && t.clientId===clientKey; })
+      .sort((a,b)=>new Date(a.time)-new Date(b.time))
+      .map(e=>{
+        const t = truckById(e.truckId);
+        const m3 = truckM3(t);
+        const price = client.price || 0;
+        return {fecha:new Date(e.time), desc:t.name+(t.patente?' — '+t.patente:''), m3, price, subtotal:m3*price};
+      });
+    return {clientName: client.name, rows};
+  }else{
+    const sales = await getMonthSales(monthKey);
+    const rows = sales
+      .filter(s=>s.billing && s.billing.razonSocial===clientKey)
+      .sort((a,b)=>new Date(a.time)-new Date(b.time))
+      .map(s=>{
+        const m = materialById(s.materialId) || {name:s.materialId};
+        const desc = (s.isReturn?'Devolución — ':'') + m.name + (s.patente?' ('+s.patente+')':'');
+        return {fecha:new Date(s.time), desc, m3:s.m3, price:s.price, subtotal:s.total};
+      });
+    return {clientName: clientKey, rows};
+  }
+}
+
+function statementHTML(clientName, monthKey, rows){
+  const totalM3 = rows.reduce((a,r)=>a+(r.m3||0),0);
+  const total = rows.reduce((a,r)=>a+r.subtotal,0);
+  const [y,m] = monthKey.split('-').map(Number);
+  const mesNombre = new Date(y,m-1,1).toLocaleDateString('es-CL',{month:'long',year:'numeric'});
+  let rowsHtml = rows.map(r=>`
+    <tr>
+      <td style="padding:4px 0;">${r.fecha.toLocaleDateString('es-CL')}</td>
+      <td>${r.desc}</td>
+      <td style="text-align:right;">${r.m3}</td>
+      <td style="text-align:right;">$${Math.round(r.price).toLocaleString('es-CL')}</td>
+      <td style="text-align:right;">$${Math.round(r.subtotal).toLocaleString('es-CL')}</td>
+    </tr>`).join('');
+  if(rows.length===0) rowsHtml = '<tr><td colspan="5" style="text-align:center;color:#888;padding:10px 0;">Sin movimientos este mes</td></tr>';
+  return `
+    <div style="padding:22px;font-family:Arial,sans-serif;">
+      <img src="${LOGO_DATA_URI}" style="height:44px;display:block;margin-bottom:14px;">
+      <h2 style="margin:0 0 4px;">Estado de cuenta</h2>
+      <p style="color:#555;margin:0 0 14px;text-transform:capitalize;">${clientName} · ${mesNombre}</p>
+      <table style="width:100%;border-collapse:collapse;font-size:0.92rem;">
+        <thead><tr style="border-bottom:2px solid #333;"><th style="text-align:left;padding:4px 0;">Fecha</th><th style="text-align:left;">Detalle</th><th style="text-align:right;">m³</th><th style="text-align:right;">Precio/m³</th><th style="text-align:right;">Subtotal</th></tr></thead>
+        <tbody>${rowsHtml}</tbody>
+        <tfoot><tr style="font-weight:bold;border-top:1px solid #ccc;"><td colspan="2" style="padding:6px 0;">Total</td><td style="text-align:right;">${totalM3}</td><td></td><td style="text-align:right;">$${Math.round(total).toLocaleString('es-CL')}</td></tr></tfoot>
+      </table>
+    </div>`;
+}
+
+async function generateClientStatement(){
+  const type = document.getElementById('stmtType').value;
+  const clientKey = document.getElementById('stmtClient').value;
+  const monthKey = document.getElementById('stmtMonth').value;
+  if(!clientKey){ showToast('Elige un cliente'); return; }
+  if(!monthKey){ showToast('Elige un mes'); return; }
+  const {clientName, rows} = await buildStatementRows(type, clientKey, monthKey);
+  openGuide(statementHTML(clientName, monthKey, rows));
+}
+
+async function downloadClientStatementCsv(){
+  const type = document.getElementById('stmtType').value;
+  const clientKey = document.getElementById('stmtClient').value;
+  const monthKey = document.getElementById('stmtMonth').value;
+  if(!clientKey){ showToast('Elige un cliente'); return; }
+  if(!monthKey){ showToast('Elige un mes'); return; }
+  const {clientName, rows} = await buildStatementRows(type, clientKey, monthKey);
+  let csv = 'Fecha,Detalle,M3,Precio_m3,Subtotal\n';
+  rows.forEach(r=>{
+    csv += `${dateKey(r.fecha)},"${r.desc.replace(/"/g,'')}",${r.m3},${r.price},${Math.round(r.subtotal)}\n`;
+  });
+  const total = rows.reduce((a,r)=>a+r.subtotal,0);
+  csv += `Total,,,,${Math.round(total)}\n`;
+  const blob = new Blob([csv], {type:'text/csv'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'estado-cuenta-'+clientName.replace(/[^a-z0-9]+/gi,'_')+'-'+monthKey+'.csv';
   a.click();
   URL.revokeObjectURL(url);
 }
@@ -2721,6 +2904,10 @@ async function showResumen(){
   renderUserEditList();
   populateAuditUserSelect();
   renderClients();
+  if(!document.getElementById('stmtMonth').value){
+    document.getElementById('stmtMonth').value = todayKey.slice(0,7);
+  }
+  await refreshStatementClientOptions();
   await refreshAllReports();
 }
 
@@ -2743,6 +2930,10 @@ async function init(){
   document.getElementById('monthPicker').addEventListener('change', e=>{ renderMonthTable(e.target.value); renderSalesMonthTable(e.target.value); });
   document.getElementById('exportCsv').addEventListener('click', exportCsv);
   document.getElementById('exportSalesCsv').addEventListener('click', exportSalesCsv);
+  document.getElementById('stmtType').addEventListener('change', refreshStatementClientOptions);
+  document.getElementById('stmtMonth').addEventListener('change', refreshStatementClientOptions);
+  document.getElementById('stmtGenerateBtn').addEventListener('click', generateClientStatement);
+  document.getElementById('stmtCsvBtn').addEventListener('click', downloadClientStatementCsv);
   document.getElementById('addTruckBtn').addEventListener('click', addTruck);
   document.getElementById('cancelTruckEditBtn').addEventListener('click', cancelEditTruck);
   document.getElementById('addUserBtn').addEventListener('click', addUser);
