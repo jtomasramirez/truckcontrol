@@ -495,6 +495,29 @@
   <!-- RESUMEN VIEW -->
   <section id="viewResumen" style="display:none;">
 
+    <div class="section-title">✅ Progreso del mes</div>
+
+    <div class="panel">
+      <h2>Días con datos cargados</h2>
+      <div class="row">
+        <input type="month" id="progressMonth">
+      </div>
+      <div id="monthProgressWrap"></div>
+      <p class="muted" style="margin-top:8px;">🚚 = tiene vueltas ese día · 📦 = tiene ventas ese día.</p>
+    </div>
+
+    <div class="section-title">🔎 Buscar por patente</div>
+
+    <div class="panel">
+      <h2>Historial de una patente</h2>
+      <div class="row">
+        <input type="text" id="patenteSearchInput" placeholder="Patente (ej: AB1234)" style="text-transform:uppercase;flex:1;min-width:140px;">
+        <button class="btn-primary" id="patenteSearchBtn">Buscar</button>
+      </div>
+      <div id="patenteSearchWrap"></div>
+      <p class="muted" style="margin-top:8px;">Busca en todo el historial de ventas de Maicillo (ahí se registra la patente) y en los camiones propios de Material integral que tengan esa patente asignada.</p>
+    </div>
+
     <div class="section-title">📦 Material integral</div>
 
     <div class="panel">
@@ -2571,6 +2594,114 @@ async function downloadClientStatementCsv(){
   URL.revokeObjectURL(url);
 }
 
+/* ---------- Progreso del mes (backfill histórico) ---------- */
+
+async function renderMonthProgress(monthKey){
+  const wrap = document.getElementById('monthProgressWrap');
+  if(!wrap) return;
+  wrap.innerHTML = '<p class="muted">Cargando...</p>';
+  let entryDays = new Set(), saleDays = new Set();
+  try{
+    const [entriesRes, salesRes] = await Promise.all([
+      sheetsStorage.list('entries:'+monthKey),
+      sheetsStorage.list('sales:'+monthKey)
+    ]);
+    entryDays = new Set((entriesRes && entriesRes.keys || []).map(k=>k.slice('entries:'.length)));
+    saleDays = new Set((salesRes && salesRes.keys || []).map(k=>k.slice('sales:'.length)));
+  }catch(e){ flagReadError(e); }
+
+  const nDays = daysInMonth(monthKey);
+  let html = '<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:6px;">';
+  const missing = [];
+  for(let d=1; d<=nDays; d++){
+    const dk = monthKey+'-'+pad(d);
+    const hasEntries = entryDays.has(dk);
+    const hasSales = saleDays.has(dk);
+    const isFuture = dk > todayKey;
+    const complete = hasEntries && hasSales;
+    const some = hasEntries || hasSales;
+    if(!isFuture && !some) missing.push(d);
+    const bg = isFuture ? 'var(--asphalt-2)' : (complete ? 'rgba(76,175,107,0.18)' : some ? 'rgba(232,96,12,0.15)' : 'rgba(214,69,69,0.12)');
+    const border = isFuture ? 'var(--line)' : (complete ? 'var(--ok)' : some ? 'var(--safety)' : 'var(--danger)');
+    html += `<div style="background:${bg};border:1px solid ${border};border-radius:8px;padding:6px 2px;text-align:center;">
+      <div style="font-family:'JetBrains Mono',monospace;font-weight:700;font-size:0.8rem;">${d}</div>
+      <div style="font-size:0.68rem;margin-top:2px;">${hasEntries?'🚚':'·'} ${hasSales?'📦':'·'}</div>
+    </div>`;
+  }
+  html += '</div>';
+  html += missing.length>0
+    ? `<p class="muted" style="margin-top:8px;">Días (hasta hoy) sin ningún dato: <b style="color:var(--danger);">${missing.join(', ')}</b></p>`
+    : `<p class="muted" style="margin-top:8px;color:var(--ok);">Todos los días del mes hasta hoy tienen al menos un registro.</p>`;
+  wrap.innerHTML = html;
+}
+
+/* ---------- Búsqueda por patente ---------- */
+
+async function searchByPatente(){
+  const wrap = document.getElementById('patenteSearchWrap');
+  const raw = document.getElementById('patenteSearchInput').value.trim().toUpperCase();
+  if(!raw){ showToast('Escribe una patente'); return; }
+  wrap.innerHTML = '<p class="muted">Buscando en todo el historial...</p>';
+
+  const matchedTruck = trucks.find(t=>(t.patente||'').toUpperCase()===raw);
+
+  let allSales = [], allEntries = [];
+  try{
+    const [salesRes, entriesRes] = await Promise.all([
+      sheetsStorage.listValues('sales:'),
+      matchedTruck ? sheetsStorage.listValues('entries:') : Promise.resolve({items:[]})
+    ]);
+    (salesRes && salesRes.items || []).forEach(item=>{
+      try{ allSales = allSales.concat(JSON.parse(item.value)); }catch(e){}
+    });
+    (entriesRes && entriesRes.items || []).forEach(item=>{
+      try{ allEntries = allEntries.concat(JSON.parse(item.value)); }catch(e){}
+    });
+  }catch(e){
+    wrap.innerHTML = '<p class="empty">No se pudo buscar — revisa tu conexión e intenta de nuevo.</p>';
+    return;
+  }
+
+  const salesMatch = allSales.filter(s=>(s.patente||'').toUpperCase()===raw)
+    .sort((a,b)=>new Date(b.time)-new Date(a.time));
+  const truckEntriesMatch = matchedTruck
+    ? allEntries.filter(e=>e.truckId===matchedTruck.id).sort((a,b)=>new Date(b.time)-new Date(a.time))
+    : [];
+
+  if(salesMatch.length===0 && truckEntriesMatch.length===0){
+    wrap.innerHTML = '<p class="empty">No se encontraron registros para esa patente.</p>';
+    return;
+  }
+
+  let html = '';
+  if(matchedTruck){
+    html += `<p class="muted" style="margin:0 0 8px;">Coincide con el camión propio <b>${matchedTruck.name}</b> (Material integral) — ${truckEntriesMatch.length} vuelta(s) en el historial.</p>`;
+    if(truckEntriesMatch.length>0){
+      html += '<table><thead><tr><th>Fecha</th><th class="num">Hora</th><th>Turno</th></tr></thead><tbody>';
+      truckEntriesMatch.slice(0,50).forEach(e=>{
+        const d = new Date(e.time);
+        const turno = e.shift==='manana' ? 'Mañana' : (e.shift==='tarde' ? 'Tarde' : '—');
+        html += `<tr><td>${d.toLocaleDateString('es-CL')}</td><td class="num">${d.toLocaleTimeString('es-CL',{hour:'2-digit',minute:'2-digit'})}</td><td>${turno}</td></tr>`;
+      });
+      html += '</tbody></table>';
+      if(truckEntriesMatch.length>50) html += `<p class="muted">Mostrando las 50 más recientes de ${truckEntriesMatch.length}.</p>`;
+    }
+  }
+  if(salesMatch.length>0){
+    html += `<p class="muted" style="margin:14px 0 8px;">${salesMatch.length} venta(s) de Maicillo encontradas:</p>`;
+    html += '<table><thead><tr><th>Fecha</th><th>Material</th><th class="num">m³</th><th class="num">Total</th></tr></thead><tbody>';
+    salesMatch.slice(0,50).forEach(s=>{
+      const d = new Date(s.time);
+      const m = materialById(s.materialId) || {name:s.materialId};
+      const tag = s.isReturn ? ' (devolución)' : '';
+      html += `<tr><td>${d.toLocaleDateString('es-CL')} ${d.toLocaleTimeString('es-CL',{hour:'2-digit',minute:'2-digit'})}</td><td>${m.name}${tag}</td><td class="num">${s.m3}</td><td class="num">$${Math.round(s.total).toLocaleString('es-CL')}</td></tr>`;
+    });
+    html += '</tbody></table>';
+    if(salesMatch.length>50) html += `<p class="muted">Mostrando las 50 más recientes de ${salesMatch.length}.</p>`;
+  }
+  wrap.innerHTML = html;
+}
+
 /* ---------- Material admin ---------- */
 
 function renderMaterialEditList(){
@@ -2907,7 +3038,11 @@ async function showResumen(){
   if(!document.getElementById('stmtMonth').value){
     document.getElementById('stmtMonth').value = todayKey.slice(0,7);
   }
+  if(!document.getElementById('progressMonth').value){
+    document.getElementById('progressMonth').value = todayKey.slice(0,7);
+  }
   await refreshStatementClientOptions();
+  await renderMonthProgress(document.getElementById('progressMonth').value);
   await refreshAllReports();
 }
 
@@ -2934,6 +3069,9 @@ async function init(){
   document.getElementById('stmtMonth').addEventListener('change', refreshStatementClientOptions);
   document.getElementById('stmtGenerateBtn').addEventListener('click', generateClientStatement);
   document.getElementById('stmtCsvBtn').addEventListener('click', downloadClientStatementCsv);
+  document.getElementById('progressMonth').addEventListener('change', e=>renderMonthProgress(e.target.value));
+  document.getElementById('patenteSearchBtn').addEventListener('click', searchByPatente);
+  document.getElementById('patenteSearchInput').addEventListener('keydown', e=>{ if(e.key==='Enter') searchByPatente(); });
   document.getElementById('addTruckBtn').addEventListener('click', addTruck);
   document.getElementById('cancelTruckEditBtn').addEventListener('click', cancelEditTruck);
   document.getElementById('addUserBtn').addEventListener('click', addUser);
