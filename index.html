@@ -843,11 +843,19 @@ function resetSaleTimeInput(){
   input.value = pad(now.getHours())+':'+pad(now.getMinutes());
 }
 
+let workingDateRequestId = 0;
 async function switchWorkingDate(newDate){
+  const requestId = ++workingDateRequestId;
   workingDate = newDate;
   updateWorkingDateUI();
-  todayEntries = await loadEntries(workingDate);
-  todaySales = await loadSales(workingDate);
+  const [entries, sales] = await Promise.all([loadEntries(workingDate), loadSales(workingDate)]);
+  if(requestId !== workingDateRequestId){
+    // Se eligió otra fecha mientras esta petición estaba en camino — esta
+    // respuesta ya llegó tarde, se descarta para no pisar la fecha actual.
+    return;
+  }
+  todayEntries = entries;
+  todaySales = sales;
   renderGrid();
   renderSalesFeed();
   updateSalesReadout();
