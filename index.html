@@ -2813,7 +2813,20 @@ function renderTruckEditList(){
   wrap.querySelectorAll('.icon-btn:not(.edit-truck-btn)').forEach(btn=>{
     btn.addEventListener('click', async ()=>{
       const id = btn.getAttribute('data-id');
-      if(await showConfirmDialog('¿Quitar este camión de la lista?')){
+      let historyCount = 0;
+      try{
+        const res = await sheetsStorage.listValues('entries:');
+        (res && res.items || []).forEach(item=>{
+          try{
+            const arr = JSON.parse(item.value);
+            historyCount += arr.filter(e=>e.truckId===id).length;
+          }catch(e2){}
+        });
+      }catch(e){}
+      const msg = historyCount > 0
+        ? `Este camión tiene ${historyCount} vuelta(s) registradas en el historial. Si lo quitas, esos registros van a quedar con un nombre genérico en vez del nombre real (no se pueden borrar, solo desaparece el camión de la lista). ¿Quitarlo de todas formas?`
+        : '¿Quitar este camión de la lista?';
+      if(await showConfirmDialog(msg)){
         trucks = trucks.filter(t=>t.id!==id);
         if(editingTruckId===id) cancelEditTruck();
         renderTruckEditList();
