@@ -1015,18 +1015,25 @@ function getWeekDateKeys(weekStr){
   return keys;
 }
 async function getWeekEntries(weekStr){
+  // Una semana puede caer en 1 o 2 meses distintos (ej: fin de mes). En vez
+  // de un pedido por día (7 pedidos, lento), se trae cada mes involucrado
+  // de una vez (ya optimizado con listValues) y se filtra a los 7 días.
   const keys = getWeekDateKeys(weekStr);
-  const perDay = await Promise.all(keys.map(k=>loadEntries(k)));
+  const keySet = new Set(keys);
+  const months = [...new Set(keys.map(k=>k.slice(0,7)))];
+  const perMonth = await Promise.all(months.map(m=>getMonthEntries(m)));
   let all = [];
-  perDay.forEach(dayEntries=>{ all = all.concat(dayEntries); });
-  return all;
+  perMonth.forEach(monthEntries=>{ all = all.concat(monthEntries); });
+  return all.filter(e=>keySet.has(dateKey(new Date(e.time))));
 }
 async function getWeekSales(weekStr){
   const keys = getWeekDateKeys(weekStr);
-  const perDay = await Promise.all(keys.map(k=>loadSales(k)));
+  const keySet = new Set(keys);
+  const months = [...new Set(keys.map(k=>k.slice(0,7)))];
+  const perMonth = await Promise.all(months.map(m=>getMonthSales(m)));
   let all = [];
-  perDay.forEach(daySales=>{ all = all.concat(daySales); });
-  return all;
+  perMonth.forEach(monthSales=>{ all = all.concat(monthSales); });
+  return all.filter(s=>keySet.has(dateKey(new Date(s.time))));
 }
 
 function showToast(msg){
