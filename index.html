@@ -740,9 +740,14 @@ function fetchWithTimeout(url, options, timeoutMs){
 
 const sheetsStorage = {
   async get(key){
+    // Importante: esto NO lanza error cuando la clave simplemente no existe
+    // todavía (devuelve null) — solo lanza error si el pedido en sí falló
+    // (red, timeout, etc.). Mezclar ambos casos fue lo que causó que un
+    // error de red se tratara igual que "esta clave nunca existió" y se
+    // terminara sobreescribiendo datos reales con valores por defecto.
     const res = await fetchWithTimeout(SHEETS_URL + '?action=get&key=' + encodeURIComponent(key));
     const data = await res.json();
-    if(data === null || data === undefined) throw new Error('key not found');
+    if(data === null || data === undefined) return null;
     return data; // {key, value}
   },
   async set(key, value){
@@ -895,11 +900,19 @@ function setShift(shift){
 
 async function loadUsers(){
   try{
-    const res = await sheetsStorage.get('users', true);
-    users = res ? JSON.parse(res.value) : DEFAULT_USERS;
+    const res = await sheetsStorage.get('users');
+    if(res){
+      users = JSON.parse(res.value);
+    }else{
+      // Realmente no existe todavía (primera vez) — recién ahí se inicializa.
+      users = DEFAULT_USERS;
+      await sheetsStorage.set('users', JSON.stringify(users), true);
+    }
   }catch(e){
+    // Error de red: se usa el default solo para esta sesión, sin guardar
+    // nada — así no se pierde lo que sí esté guardado en la hoja.
     users = DEFAULT_USERS;
-    try{ await sheetsStorage.set('users', JSON.stringify(users), true); }catch(e2){}
+    flagReadError(e);
   }
 }
 async function saveUsers(){
@@ -1044,19 +1057,29 @@ function showToast(msg){
 }
 
 async function loadTrucks(){
+  let fromNetwork = false;
   try{
-    const res = await sheetsStorage.get('trucks', true);
-    trucks = res ? JSON.parse(res.value) : DEFAULT_TRUCKS;
+    const res = await sheetsStorage.get('trucks');
+    if(res){
+      trucks = JSON.parse(res.value);
+      fromNetwork = true;
+    }else{
+      trucks = DEFAULT_TRUCKS;
+      await sheetsStorage.set('trucks', JSON.stringify(trucks), true);
+      fromNetwork = true;
+    }
   }catch(e){
     trucks = DEFAULT_TRUCKS;
-    try{ await sheetsStorage.set('trucks', JSON.stringify(trucks), true); }catch(e2){}
+    flagReadError(e);
   }
-  // Migración: camiones guardados antes de que existieran los clientes
+  // Migración: camiones guardados antes de que existieran los clientes.
+  // Solo se guarda de vuelta si los datos vinieron de la red (nunca sobre
+  // el fallback en memoria de un error, para no pisar lo real guardado).
   let needsBackfill = false;
   trucks.forEach(t=>{
     if(!t.clientId){ t.clientId = 'santa_magdalena'; needsBackfill = true; }
   });
-  if(needsBackfill) saveTrucks();
+  if(needsBackfill && fromNetwork) saveTrucks();
 }
 async function saveTrucks(){
   try{ await sheetsStorage.set('trucks', JSON.stringify(trucks), true); }
@@ -1065,17 +1088,24 @@ async function saveTrucks(){
 
 async function loadMaterialClients(){
   try{
-    const res = await sheetsStorage.get('material_clients', true);
+    const res = await sheetsStorage.get('material_clients');
     if(res){
       materialClients = JSON.parse(res.value);
       return;
     }
-  }catch(e){}
-  // No existe todavía: migrar desde la configuración antigua (un solo cliente/precio)
+  }catch(e){
+    // Error de red: no hay nada seguro que mostrar, pero tampoco se debe
+    // pisar la hoja — se deja la lista vacía en memoria para esta sesión.
+    flagReadError(e);
+    materialClients = [];
+    return;
+  }
+  // Llegar acá significa que la clave realmente no existe todavía (primera
+  // vez): recién ahí se migra desde la configuración antigua y se guarda.
   const legacyName = (appSettings && appSettings.materialIntegralClient) || 'Áridos Santa Magdalena';
   const legacyPrice = (appSettings && appSettings.materialIntegralPrice) || 0;
   materialClients = [{id:'santa_magdalena', name: legacyName, price: legacyPrice}];
-  try{ await sheetsStorage.set('material_clients', JSON.stringify(materialClients), true); }catch(e2){}
+  await sheetsStorage.set('material_clients', JSON.stringify(materialClients), true);
 }
 async function saveMaterialClients(){
   try{ await sheetsStorage.set('material_clients', JSON.stringify(materialClients), true); }
@@ -1266,15 +1296,20 @@ function truckM3(t){ return (t && t.m3) || M3_PER_TRUCK; }
 
 async function loadMaterials(){
   try{
-    const res = await sheetsStorage.get('materials', true);
-    materials = res ? JSON.parse(res.value) : DEFAULT_MATERIALS;
-    if(materials.length===1 && materials[0].id==='maicillo' && materials[0].price===0){
+    const res = await sheetsStorage.get('materials');
+    if(res){
+      materials = JSON.parse(res.value);
+      if(materials.length===1 && materials[0].id==='maicillo' && materials[0].price===0){
+        materials = DEFAULT_MATERIALS;
+        await sheetsStorage.set('materials', JSON.stringify(materials), true);
+      }
+    }else{
       materials = DEFAULT_MATERIALS;
       await sheetsStorage.set('materials', JSON.stringify(materials), true);
     }
   }catch(e){
     materials = DEFAULT_MATERIALS;
-    try{ await sheetsStorage.set('materials', JSON.stringify(materials), true); }catch(e2){}
+    flagReadError(e);
   }
 }
 async function saveMaterials(){
