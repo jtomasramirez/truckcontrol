@@ -3192,13 +3192,10 @@ async function init(){
   document.getElementById('monthPicker').value = todayKey.slice(0,7);
   document.getElementById('weekPicker').value = getISOWeekString(now);
   populateNewTruckClientSelect();
-  renderDayTable(todayKey);
-  renderDayDetail(todayKey);
-  renderMonthTable(todayKey.slice(0,7));
-  renderWeekTable(getISOWeekString(now));
-  renderSalesDayTable(todayKey);
-  renderSalesWeekTable(getISOWeekString(now));
-  renderSalesMonthTable(todayKey.slice(0,7));
+  // Los reportes de día/semana/mes (Integral y Ventas) NO se cargan acá:
+  // se disparaban ~20 pedidos al backend en cada carga de la app aunque
+  // nadie abriera Resumen. Ahora se cargan recién al entrar a esa pestaña,
+  // vía showResumen() -> refreshAllReports().
 
   document.getElementById('loadingOverlay').style.display = 'none';
 }
