@@ -281,6 +281,21 @@
 </head>
 <body>
 
+<div id="setupOverlay" style="position:fixed;inset:0;background:var(--asphalt);z-index:300;display:none;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:24px;overflow-y:auto;">
+  <div class="brand" style="font-size:1.3rem;text-align:center;">Configuración inicial</div>
+  <p class="muted" style="margin:0;text-align:center;max-width:420px;">Esta app todavía no está conectada a ninguna hoja de datos en este dispositivo. Sigue estos pasos una sola vez:</p>
+  <ol class="muted" style="max-width:420px;font-size:0.85rem;line-height:1.6;padding-left:20px;margin:0;">
+    <li>Crea una hoja de cálculo nueva en Google Sheets (puede estar vacía).</li>
+    <li>Extensiones → Apps Script, pega el código del proyecto (<code>Code.gs</code>) y guarda.</li>
+    <li>Implementar → Nueva implementación → Aplicación web → Ejecutar como: yo, Quién tiene acceso: Cualquier usuario → Implementar.</li>
+    <li>Copia el link que termina en <code>/exec</code> y pégalo abajo.</li>
+  </ol>
+  <input type="text" id="setupUrlInput" placeholder="https://script.google.com/macros/s/.../exec" style="width:100%;max-width:420px;padding:12px;background:var(--asphalt-2);border:1px solid var(--line);color:var(--concrete);border-radius:8px;font-size:0.9rem;">
+  <p id="setupError" style="color:var(--danger);font-size:0.82rem;display:none;margin:0;text-align:center;max-width:420px;"></p>
+  <button class="btn-primary" id="setupSaveBtn" style="width:100%;max-width:420px;padding:13px;">Conectar y continuar</button>
+  <p class="muted" style="font-size:0.72rem;text-align:center;max-width:420px;margin:0;">Esto se guarda solo en este dispositivo/navegador — cada camión o computador que uses la app necesita hacer este paso una vez.</p>
+</div>
+
 <div id="loadingOverlay" style="position:fixed;inset:0;background:var(--asphalt);z-index:200;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:20px;">
   <div class="brand" style="font-size:1.2rem;">Cargando datos...</div>
   <p class="muted" style="margin:0;text-align:center;">Conectando con la hoja de datos.<br>Puede tardar unos segundos.</p>
@@ -713,6 +728,7 @@
         <button class="btn-flat" id="cancelTruckEditBtn" style="display:none;">Cancelar edición</button>
       </div>
       <button class="btn-flat" id="changePinBtn" style="margin-top:10px;">Cambiar PIN de Resumen</button>
+      <button class="btn-flat danger" id="resetSheetsUrlBtn" style="margin-top:10px;">Desconectar hoja de datos de este dispositivo</button>
       <p class="muted">Si dos camiones son iguales en marca y color (como tus dos Scania rojos), agrégalos como camiones separados (ej. "Scania rojo #1" y "Scania rojo #2") y pon un número visible pegado en el parabrisas o la puerta para que el portero sepa cuál es cuál.</p>
     </div>
   </section>
@@ -724,7 +740,18 @@
 
 <script>
 /* ===== Conector de Google Sheets (reemplaza el guardado de Claude) ===== */
-const SHEETS_URL = 'https://script.google.com/macros/s/AKfycbyvUJjBDBgDtip424WEDdTIAUVnlC8lSU7TCYlHIyCxMFt52-RJvOfS4b9CBO6fJBnI/exec';
+// La URL de Apps Script ya NO va hardcodeada acá: cada instalación (cada
+// cliente) la configura una vez desde la pantalla de configuración inicial
+// y queda guardada en este dispositivo. Así el mismo código sirve para
+// cualquier negocio, cada uno conectado a su propia hoja, sin mezclarse.
+let SHEETS_URL = localStorage.getItem('sheetsUrl') || '';
+{
+  const paramUrl = new URLSearchParams(window.location.search).get('sheetsurl');
+  if(paramUrl){
+    SHEETS_URL = paramUrl;
+    localStorage.setItem('sheetsUrl', paramUrl);
+  }
+}
 
 // Deduplica pedidos idénticos que salen casi al mismo tiempo (ej: al abrir
 // Resumen, varias tablas piden el mismo mes/día por separado). Todos los
@@ -3196,6 +3223,7 @@ async function init(){
   document.getElementById('addExpenseBtn').addEventListener('click', addExpense);
   document.getElementById('addMaterialBtn').addEventListener('click', addMaterial);
   document.getElementById('changePinBtn').addEventListener('click', changePin);
+  document.getElementById('resetSheetsUrlBtn').addEventListener('click', resetSheetsUrl);
   document.getElementById('addMaterialClientBtn').addEventListener('click', addMaterialClient);
   document.getElementById('pickMorning').addEventListener('click', ()=>setShift('manana'));
   document.getElementById('pickAfternoon').addEventListener('click', ()=>setShift('tarde'));
@@ -3304,7 +3332,58 @@ async function init(){
   document.getElementById('loadingOverlay').style.display = 'none';
 }
 
-init();
+function testSheetsUrl(url){
+  return fetchWithTimeout(url + '?action=list&prefix=__setup_check__', {}, 10000)
+    .then(res=>res.json())
+    .then(data=>{
+      if(!data || !Array.isArray(data.keys)) throw new Error('Respuesta inesperada');
+      return true;
+    });
+}
+
+async function trySetupUrl(){
+  const input = document.getElementById('setupUrlInput');
+  const errorEl = document.getElementById('setupError');
+  const btn = document.getElementById('setupSaveBtn');
+  const url = input.value.trim();
+  errorEl.style.display = 'none';
+  if(!/^https:\/\/script\.google\.com\/macros\/s\/.+\/exec$/.test(url)){
+    errorEl.textContent = 'Ese link no parece válido. Debe empezar con https://script.google.com/macros/s/ y terminar en /exec';
+    errorEl.style.display = '';
+    return;
+  }
+  btn.disabled = true; btn.textContent = 'Probando conexión...';
+  try{
+    await testSheetsUrl(url);
+    localStorage.setItem('sheetsUrl', url);
+    window.location.reload();
+  }catch(e){
+    errorEl.textContent = 'No se pudo conectar con esa hoja. Revisa que el link esté completo y que la implementación tenga acceso "Cualquier usuario".';
+    errorEl.style.display = '';
+    btn.disabled = false; btn.textContent = 'Conectar y continuar';
+  }
+}
+
+function resetSheetsUrl(){
+  showConfirmDialog('¿Desconectar esta app de la hoja actual? Vas a tener que volver a pegar el link de conexión.').then(ok=>{
+    if(!ok) return;
+    localStorage.removeItem('sheetsUrl');
+    window.location.reload();
+  });
+}
+
+function startApp(){
+  if(!SHEETS_URL){
+    document.getElementById('loadingOverlay').style.display = 'none';
+    document.getElementById('setupOverlay').style.display = 'flex';
+    document.getElementById('setupSaveBtn').addEventListener('click', trySetupUrl);
+    document.getElementById('setupUrlInput').addEventListener('keydown', e=>{ if(e.key==='Enter') trySetupUrl(); });
+    return;
+  }
+  init();
+}
+
+startApp();
 </script>
 </body>
 </html>
