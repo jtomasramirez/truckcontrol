@@ -744,14 +744,15 @@
 // cliente) la configura una vez desde la pantalla de configuración inicial
 // y queda guardada en este dispositivo. Así el mismo código sirve para
 // cualquier negocio, cada uno conectado a su propia hoja, sin mezclarse.
+//
+// Importante: un ?sheetsurl=... en la URL NUNCA se guarda automáticamente
+// sin validar — si no fuera así, un link malicioso podría redirigir
+// silenciosamente el dispositivo a una hoja/backend falso. En vez de eso,
+// solo se usa para PRECARGAR el campo de la pantalla de configuración,
+// que igual pasa por la validación de formato + prueba de conexión antes
+// de guardar nada.
 let SHEETS_URL = localStorage.getItem('sheetsUrl') || '';
-{
-  const paramUrl = new URLSearchParams(window.location.search).get('sheetsurl');
-  if(paramUrl){
-    SHEETS_URL = paramUrl;
-    localStorage.setItem('sheetsUrl', paramUrl);
-  }
-}
+const SHEETS_URL_PARAM = new URLSearchParams(window.location.search).get('sheetsurl') || '';
 
 // Deduplica pedidos idénticos que salen casi al mismo tiempo (ej: al abrir
 // Resumen, varias tablas piden el mismo mes/día por separado). Todos los
@@ -985,7 +986,7 @@ async function saveUsers(){
 
 function showUserLogin(){
   const sel = document.getElementById('loginUserSelect');
-  sel.innerHTML = users.map(u=>`<option value="${u.id}">${u.name}</option>`).join('');
+  sel.innerHTML = users.map(u=>`<option value="${u.id}">${escapeHtml(u.name)}</option>`).join('');
   document.getElementById('loginPassword').value = '';
   document.getElementById('loginError').style.display = 'none';
   document.getElementById('userLoginOverlay').style.display = 'flex';
@@ -1017,7 +1018,7 @@ function openCloseShift(){
   const transfer = mySales.filter(s=>s.payment==='transferencia').reduce((a,s)=>a+s.total,0);
   const wrap = document.getElementById('closeShiftSummary');
   wrap.innerHTML = `
-    <p style="margin:4px 0;">👤 ${currentUser.name} · ${currentShift==='manana'?'Turno Mañana':'Turno Tarde'}</p>
+    <p style="margin:4px 0;">👤 ${escapeHtml(currentUser.name)} · ${currentShift==='manana'?'Turno Mañana':'Turno Tarde'}</p>
     <p style="margin:4px 0;">🚚 Vueltas Material integral: <b>${myEntries.length}</b></p>
     <p style="margin:4px 0;">📦 Ventas Maicillo: <b>${mySales.length}</b></p>
     <p style="margin:4px 0;">💵 Efectivo recibido: <b style="color:var(--ok);">$${cash.toLocaleString('es-CL')}</b></p>
@@ -1053,6 +1054,26 @@ function confirmCloseShift(){
 
 
 function pad(n){ return String(n).padStart(2,'0'); }
+// El backend no tiene autenticación: cualquier texto que venga de la hoja
+// (nombres de camión, patentes, notas, razón social, etc.) se trata como
+// no confiable y se escapa antes de insertar en innerHTML, para que no se
+// pueda inyectar HTML/JS ejecutable a través de esos campos.
+// Para celdas de CSV: evita que un valor empiece con =, +, -, @ (Excel/Sheets
+// lo interpretaría como fórmula) y escapa comillas dobles embebidas.
+function csvCell(str){
+  str = (str === null || str === undefined) ? '' : String(str);
+  if(/^[=+\-@]/.test(str)) str = "'" + str;
+  return '"' + str.replace(/"/g,'""') + '"';
+}
+function escapeHtml(str){
+  if(str === null || str === undefined) return '';
+  return String(str)
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;')
+    .replace(/'/g,'&#39;');
+}
 function dateKey(d){ return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate()); }
 function monthKeyOf(k){ return k.slice(0,7); }
 function fmtDateLabel(k){
@@ -1256,11 +1277,11 @@ function guideHTMLForEntry(e){
   return `
     <div style="padding:22px;font-family:Arial,sans-serif;">
       <img src="${LOGO_DATA_URI}" style="height:44px;display:block;margin-bottom:14px;">
-      <h2 style="margin:0 0 4px;">Guía de Despacho N° ${e.folio || '—'}</h2>
+      <h2 style="margin:0 0 4px;">Guía de Despacho N° ${escapeHtml(e.folio) || '—'}</h2>
       <p style="color:#555;margin:0 0 14px;">Material integral · Áridos y rocas</p>
       <p><b>Fecha:</b> ${fecha.toLocaleDateString('es-CL')} ${fecha.toLocaleTimeString('es-CL',{hour:'2-digit',minute:'2-digit'})}</p>
-      <p><b>Cliente:</b> ${cliente.name || '—'}</p>
-      <p><b>Camión:</b> ${t.name}${t.patente ? ' — '+t.patente : ''}</p>
+      <p><b>Cliente:</b> ${escapeHtml(cliente.name) || '—'}</p>
+      <p><b>Camión:</b> ${escapeHtml(t.name)}${t.patente ? ' — '+escapeHtml(t.patente) : ''}</p>
       <table style="width:100%;border-collapse:collapse;margin-top:12px;">
         <tr><td style="padding:4px 0;">Material</td><td style="text-align:right;">Material integral</td></tr>
         <tr><td style="padding:4px 0;">Cantidad</td><td style="text-align:right;">${m3} m³</td></tr>
@@ -1273,22 +1294,22 @@ function guideHTMLForEntry(e){
 function guideHTMLForSale(s){
   const m = materialById(s.materialId) || {name:s.materialId};
   const fecha = new Date(s.time);
-  const cliente = (s.billing && s.billing.razonSocial) ? s.billing.razonSocial : 'Cliente sin identificar';
-  const rutLine = (s.billing && s.billing.rut) ? `<p><b>RUT:</b> ${s.billing.rut}</p>` : '';
+  const cliente = (s.billing && s.billing.razonSocial) ? escapeHtml(s.billing.razonSocial) : 'Cliente sin identificar';
+  const rutLine = (s.billing && s.billing.rut) ? `<p><b>RUT:</b> ${escapeHtml(s.billing.rut)}</p>` : '';
   const ivaRows = s.iva ? `
         <tr><td style="padding:4px 0;">Neto</td><td style="text-align:right;">$${(s.neto||0).toLocaleString('es-CL')}</td></tr>
         <tr><td style="padding:4px 0;">IVA (19%)</td><td style="text-align:right;">$${(s.iva||0).toLocaleString('es-CL')}</td></tr>` : '';
   return `
     <div style="padding:22px;font-family:Arial,sans-serif;">
       <img src="${LOGO_DATA_URI}" style="height:44px;display:block;margin-bottom:14px;">
-      <h2 style="margin:0 0 4px;">Guía de Despacho N° ${s.folio || '—'}</h2>
+      <h2 style="margin:0 0 4px;">Guía de Despacho N° ${escapeHtml(s.folio) || '—'}</h2>
       <p style="color:#555;margin:0 0 14px;">Maicillo</p>
       <p><b>Fecha:</b> ${fecha.toLocaleDateString('es-CL')} ${fecha.toLocaleTimeString('es-CL',{hour:'2-digit',minute:'2-digit'})}</p>
       <p><b>Cliente:</b> ${cliente}</p>
       ${rutLine}
-      <p><b>Patente camión:</b> ${s.patente || '—'} ${s.marca ? ('— '+s.marca) : ''}</p>
+      <p><b>Patente camión:</b> ${escapeHtml(s.patente) || '—'} ${s.marca ? ('— '+escapeHtml(s.marca)) : ''}</p>
       <table style="width:100%;border-collapse:collapse;margin-top:12px;">
-        <tr><td style="padding:4px 0;">Material</td><td style="text-align:right;">${m.name}</td></tr>
+        <tr><td style="padding:4px 0;">Material</td><td style="text-align:right;">${escapeHtml(m.name)}</td></tr>
         <tr><td style="padding:4px 0;">Cantidad</td><td style="text-align:right;">${s.m3} m³</td></tr>
         <tr><td style="padding:4px 0;">Precio / m³</td><td style="text-align:right;">$${s.price.toLocaleString('es-CL')}</td></tr>
         ${ivaRows}
@@ -1420,9 +1441,9 @@ function renderGrid(){
     btn.className = 'truck-btn';
     const textColor = isLight(truck.color) ? '#1a1a1a' : '#efe9dc';
     btn.innerHTML = `
-      <span class="swatch" style="background:${truck.color}"></span>
-      ${truck.badge ? `<span class="badge" style="color:${textColor==='#1a1a1a' && isLight(truck.color) ? '#1a1a1a' : '#efe9dc'}">${truck.badge}</span>` : ''}
-      <span class="name">${truck.name}</span>
+      <span class="swatch" style="background:${escapeHtml(truck.color)}"></span>
+      ${truck.badge ? `<span class="badge" style="color:${textColor==='#1a1a1a' && isLight(truck.color) ? '#1a1a1a' : '#efe9dc'}">${escapeHtml(truck.badge)}</span>` : ''}
+      <span class="name">${escapeHtml(truck.name)}</span>
       <span class="count">Hoy: <b>${count}</b></span>
     `;
     btn.addEventListener('click', ()=>tapTruck(truck.id));
@@ -1444,8 +1465,8 @@ function renderTruckFeed(){
     const t = truckById(e.truckId) || {name:e.truckId, color:'#888'};
     const hora = new Date(e.time).toLocaleTimeString('es-CL',{hour:'2-digit',minute:'2-digit'});
     const turno = e.shift==='manana' ? '☀️' : (e.shift==='tarde' ? '🌙' : '');
-    const usuarioTxt = e.usuario && e.usuario!=='—' ? ' · <span class="muted">'+e.usuario.split(' ')[0]+'</span>' : '';
-    html += `<div class="truck-edit-row"><span class="name"><b style="color:var(--safety)">${hora}</b> · <span class="swatch-dot" style="background:${t.color}"></span>${t.name} ${turno}${usuarioTxt}${e.folio?' · <span class="muted">Folio '+e.folio+'</span>':''}</span><button class="icon-btn" data-guide-entry-idx="${i}" style="color:var(--concrete-dim);">📄</button></div>`;
+    const usuarioTxt = e.usuario && e.usuario!=='—' ? ' · <span class="muted">'+escapeHtml(e.usuario.split(' ')[0])+'</span>' : '';
+    html += `<div class="truck-edit-row"><span class="name"><b style="color:var(--safety)">${hora}</b> · <span class="swatch-dot" style="background:${escapeHtml(t.color)}"></span>${escapeHtml(t.name)} ${turno}${usuarioTxt}${e.folio?' · <span class="muted">Folio '+escapeHtml(e.folio)+'</span>':''}</span><button class="icon-btn" data-guide-entry-idx="${i}" style="color:var(--concrete-dim);">📄</button></div>`;
   });
   wrap.innerHTML = html;
   wrap.querySelectorAll('.icon-btn[data-guide-entry-idx]').forEach(btn=>{
@@ -1572,7 +1593,7 @@ async function undoLast(){
 
 function renderMaterialSelect(){
   const sel = document.getElementById('saleMaterial');
-  sel.innerHTML = materials.map(m=>`<option value="${m.id}">${m.name}</option>`).join('');
+  sel.innerHTML = materials.map(m=>`<option value="${m.id}">${escapeHtml(m.name)}</option>`).join('');
   updatePriceFromMaterial();
 }
 function updatePriceFromMaterial(){
@@ -1700,7 +1721,7 @@ async function checkFrequentClient(){
       const avgM3 = (c.totalM3 / c.visits).toFixed(1);
       banner.style.display = '';
       const precioTxt = c.precioEspecial ? ` · 💲 precio especial: $${c.precioEspecial.toLocaleString('es-CL')}/m³` : '';
-      banner.innerHTML = `🔁 Cliente frecuente: ${c.visits} visitas · promedio ${avgM3} m³ · última compra: ${c.lastMaterial} (${c.lastM3} m³)${precioTxt}`;
+      banner.innerHTML = `🔁 Cliente frecuente: ${c.visits} visitas · promedio ${avgM3} m³ · última compra: ${escapeHtml(c.lastMaterial)} (${c.lastM3} m³)${precioTxt}`;
       if(!document.getElementById('saleM3').value) document.getElementById('saleM3').value = c.lastM3;
       const matOption = [...document.getElementById('saleMaterial').options].find(o=>o.textContent===c.lastMaterial);
       if(matOption){ document.getElementById('saleMaterial').value = matOption.value; updatePriceFromMaterial(); }
@@ -1762,7 +1783,7 @@ function renderClientsTable(clients){
   let html = '<table><thead><tr><th>Patente</th><th class="num">Visitas</th><th class="num">Total m³</th><th>Último material</th><th>Precio especial</th></tr></thead><tbody>';
   clients.forEach(c=>{
     const precioTxt = c.precioEspecial ? ('$'+c.precioEspecial.toLocaleString('es-CL')) : '—';
-    html += `<tr><td>${c.patente}</td><td class="num">${c.visits}</td><td class="num">${c.totalM3.toFixed(1)}</td><td>${c.lastMaterial||'—'}</td><td>${precioTxt} <button class="icon-btn edit-price-btn" data-patente="${c.patente}" style="color:var(--concrete-dim);font-size:0.8rem;">✎</button></td></tr>`;
+    html += `<tr><td>${escapeHtml(c.patente)}</td><td class="num">${c.visits}</td><td class="num">${c.totalM3.toFixed(1)}</td><td>${escapeHtml(c.lastMaterial)||'—'}</td><td>${precioTxt} <button class="icon-btn edit-price-btn" data-patente="${escapeHtml(c.patente)}" style="color:var(--concrete-dim);font-size:0.8rem;">✎</button></td></tr>`;
   });
   html += '</tbody></table>';
   wrap.innerHTML = html;
@@ -1896,8 +1917,8 @@ function renderSalesFeed(){
     const totalColor = s.isReturn ? 'var(--danger)' : 'var(--safety)';
     const tagTxt = s.isReturn ? '↩ Devolución · ' : (s.returned ? '⚠️ Devuelta · ' : '');
     const rowStyle = s.isReturn ? 'opacity:0.85;' : '';
-    const usuarioTxt = s.usuario && s.usuario!=='—' ? ' · <span class="muted">'+s.usuario.split(' ')[0]+'</span>' : '';
-    html += `<div class="truck-edit-row" style="${rowStyle}"><span class="name">${tagTxt}${hora} · ${m.name} · ${s.m3}m³ · <b style="color:${totalColor}">$${s.total.toLocaleString('es-CL')}</b>${ivaTxt} · ${payIcon}${usuarioTxt}${s.patente?' · <b>'+s.patente+'</b>'+(s.marca?' '+s.marca:''):''}${s.note?' · '+s.note:''}${s.folio?' · <span class="muted">Folio '+s.folio+'</span>':''}</span>`;
+    const usuarioTxt = s.usuario && s.usuario!=='—' ? ' · <span class="muted">'+escapeHtml(s.usuario.split(' ')[0])+'</span>' : '';
+    html += `<div class="truck-edit-row" style="${rowStyle}"><span class="name">${tagTxt}${hora} · ${escapeHtml(m.name)} · ${s.m3}m³ · <b style="color:${totalColor}">$${s.total.toLocaleString('es-CL')}</b>${ivaTxt} · ${payIcon}${usuarioTxt}${s.patente?' · <b>'+escapeHtml(s.patente)+'</b>'+(s.marca?' '+escapeHtml(s.marca):''):''}${s.note?' · '+escapeHtml(s.note):''}${s.folio?' · <span class="muted">Folio '+escapeHtml(s.folio)+'</span>':''}</span>`;
     if(!s.isReturn){
       html += `<button class="icon-btn" data-guide-sale-idx="${i}" style="color:var(--concrete-dim);">📄</button>`;
     }
@@ -1951,7 +1972,7 @@ function buildIntegralReport(entries){
 function renderIntegralTableHTML(report){
   let html = '<table><thead><tr><th>Camión</th><th>Cliente</th><th class="num">Vueltas</th><th class="num">m³</th><th class="num">$</th></tr></thead><tbody>';
   report.rows.forEach(r=>{
-    html += `<tr><td><span class="swatch-dot" style="background:${r.color}"></span>${r.name}</td><td class="muted">${r.clientName}</td><td class="num">${r.count}</td><td class="num">${r.m3}</td><td class="num">$${r.revenue.toLocaleString('es-CL')}</td></tr>`;
+    html += `<tr><td><span class="swatch-dot" style="background:${escapeHtml(r.color)}"></span>${escapeHtml(r.name)}</td><td class="muted">${escapeHtml(r.clientName)}</td><td class="num">${r.count}</td><td class="num">${r.m3}</td><td class="num">$${r.revenue.toLocaleString('es-CL')}</td></tr>`;
   });
   html += `<tr class="total"><td colspan="2">Total</td><td class="num">${report.totalCount}</td><td class="num">${report.totalM3}</td><td class="num">$${report.totalRevenue.toLocaleString('es-CL')}</td></tr>`;
   html += '</tbody></table>';
@@ -1960,7 +1981,7 @@ function renderIntegralTableHTML(report){
     html += '<p class="muted" style="margin:8px 0 4px;">Por cliente:</p><table><thead><tr><th>Cliente</th><th class="num">m³</th><th class="num">$</th></tr></thead><tbody>';
     clientKeys.forEach(ck=>{
       const cd = report.byClient[ck];
-      html += `<tr><td>${cd.name}</td><td class="num">${cd.m3}</td><td class="num">$${cd.revenue.toLocaleString('es-CL')}</td></tr>`;
+      html += `<tr><td>${escapeHtml(cd.name)}</td><td class="num">${cd.m3}</td><td class="num">$${cd.revenue.toLocaleString('es-CL')}</td></tr>`;
     });
     html += '</tbody></table>';
   }
@@ -1991,7 +2012,7 @@ async function renderDayDetail(key){
     const t = truckById(e.truckId) || {name:e.truckId, color:'#888'};
     const hora = new Date(e.time).toLocaleTimeString('es-CL',{hour:'2-digit',minute:'2-digit'});
     const turno = e.shift==='manana' ? 'Mañana' : (e.shift==='tarde' ? 'Tarde' : '—');
-    html += `<tr><td class="num">${hora}</td><td><span class="swatch-dot" style="background:${t.color}"></span>${t.name}</td><td>${turno}</td></tr>`;
+    html += `<tr><td class="num">${hora}</td><td><span class="swatch-dot" style="background:${escapeHtml(t.color)}"></span>${escapeHtml(t.name)}</td><td>${turno}</td></tr>`;
   });
   html += '</tbody></table>';
   wrap.innerHTML = html;
@@ -2086,7 +2107,7 @@ async function exportCsv(){
   const report = buildIntegralReport(entries);
   let csv = 'Camion,Cliente,Vueltas,M3,Ingreso\n';
   report.rows.forEach(r=>{
-    csv += `"${r.name}","${r.clientName}",${r.count},${r.m3},${Math.round(r.revenue)}\n`;
+    csv += `${csvCell(r.name)},${csvCell(r.clientName)},${r.count},${r.m3},${Math.round(r.revenue)}\n`;
   });
   csv += `Total,,${report.totalCount},${report.totalM3},${Math.round(report.totalRevenue)}\n`;
   const blob = new Blob([csv], {type:'text/csv'});
@@ -2119,7 +2140,7 @@ function renderSalesTable(wrapId, sales){
   Object.keys(byMaterial).forEach(id=>{
     const m = materialById(id) || {name:id};
     const row = byMaterial[id];
-    html += `<tr><td>${m.name}</td><td class="num">${row.m3.toFixed(1)}</td><td class="num">$${row.total.toLocaleString('es-CL')}</td></tr>`;
+    html += `<tr><td>${escapeHtml(m.name)}</td><td class="num">${row.m3.toFixed(1)}</td><td class="num">$${row.total.toLocaleString('es-CL')}</td></tr>`;
   });
   const grand = cashTotal+transferTotal;
   html += `<tr class="total"><td>Total</td><td class="num">${sales.reduce((a,s)=>a+s.m3,0).toFixed(1)}</td><td class="num">$${grand.toLocaleString('es-CL')}</td></tr>`;
@@ -2150,7 +2171,7 @@ function renderSalesDayDetail(sales){
     const hora = new Date(s.time).toLocaleTimeString('es-CL',{hour:'2-digit',minute:'2-digit'});
     const payIcon = s.payment==='efectivo' ? '💵' : '🏦';
     const tag = s.isReturn ? ' ↩' : '';
-    html += `<tr><td class="num">${hora}</td><td>${m.name}${tag}${s.patente?'<br><span class="muted">'+s.patente+'</span>':''}</td><td class="num">${s.m3}</td><td class="num">$${s.total.toLocaleString('es-CL')}</td><td>${payIcon}</td></tr>`;
+    html += `<tr><td class="num">${hora}</td><td>${escapeHtml(m.name)}${tag}${s.patente?'<br><span class="muted">'+escapeHtml(s.patente)+'</span>':''}</td><td class="num">${s.m3}</td><td class="num">$${s.total.toLocaleString('es-CL')}</td><td>${payIcon}</td></tr>`;
   });
   html += '</tbody></table>';
   wrap.innerHTML = html;
@@ -2174,8 +2195,8 @@ function renderBillingList(sales){
   let html = '<table><thead><tr><th>Hora</th><th>Empresa / RUT</th><th class="num">Total</th></tr></thead><tbody>';
   withBilling.forEach(s=>{
     const hora = new Date(s.time).toLocaleTimeString('es-CL',{hour:'2-digit',minute:'2-digit'});
-    const emailTxt = s.billing.email ? '<br><span class="muted">'+s.billing.email+'</span>' : '';
-    html += `<tr><td>${hora}${s.patente?'<br><span class="muted">'+s.patente+'</span>':''}</td><td>${s.billing.razonSocial}<br><span class="muted">${s.billing.rut}</span>${emailTxt}</td><td class="num">$${s.total.toLocaleString('es-CL')}</td></tr>`;
+    const emailTxt = s.billing.email ? '<br><span class="muted">'+escapeHtml(s.billing.email)+'</span>' : '';
+    html += `<tr><td>${hora}${s.patente?'<br><span class="muted">'+escapeHtml(s.patente)+'</span>':''}</td><td>${escapeHtml(s.billing.razonSocial)}<br><span class="muted">${escapeHtml(s.billing.rut)}</span>${emailTxt}</td><td class="num">$${s.total.toLocaleString('es-CL')}</td></tr>`;
   });
   html += '</tbody></table>';
   wrap.innerHTML = html;
@@ -2222,7 +2243,7 @@ async function renderReceivables(monthKey){
     const diasPendiente = Math.floor((now - d) / (1000*60*60*24));
     const vencida = diasPendiente > 7;
     if(vencida) vencidas++;
-    const empresa = (s.billing && s.billing.razonSocial) ? s.billing.razonSocial : (s.patente || 'Sin identificar');
+    const empresa = escapeHtml((s.billing && s.billing.razonSocial) ? s.billing.razonSocial : (s.patente || 'Sin identificar'));
     const rowStyle = vencida ? 'color:var(--danger);' : '';
     const tag = vencida ? ' ⚠️ '+diasPendiente+'d' : '';
     html += `<tr style="${rowStyle}"><td>${d.toLocaleDateString('es-CL')}${tag}</td><td>${empresa}</td><td class="num">$${s.total.toLocaleString('es-CL')}</td><td><button class="btn-flat mark-paid-btn" data-datekey="${dk}" data-time="${s.time}" style="padding:4px 10px;font-size:0.72rem;">Marcar pagado</button></td></tr>`;
@@ -2263,11 +2284,11 @@ async function renderIntegralReceivable(monthKey){
   for(const c of materialClients){
     const state = await loadIntegralReceivable(monthKey, c.id);
     if(state.paid){
-      html += `<p class="muted">✅ ${c.name}: cobrado el ${state.paidDate}. <button class="btn-flat integral-toggle" data-client="${c.id}" data-paid="true" style="padding:5px 12px;font-size:0.75rem;">Marcar pendiente</button></p>`;
+      html += `<p class="muted">✅ ${escapeHtml(c.name)}: cobrado el ${state.paidDate}. <button class="btn-flat integral-toggle" data-client="${c.id}" data-paid="true" style="padding:5px 12px;font-size:0.75rem;">Marcar pendiente</button></p>`;
     }else{
       const vencido = isPastMonth && now.getDate() > 10;
       const alerta = vencido ? `<span style="color:var(--danger);font-weight:600;">⚠️ </span>` : '';
-      html += `<p class="muted">${alerta}⏳ ${c.name}: pendiente de cobro este mes. <button class="btn-primary integral-toggle" data-client="${c.id}" data-paid="false" style="padding:6px 14px;font-size:0.8rem;">Marcar cobrado</button></p>`;
+      html += `<p class="muted">${alerta}⏳ ${escapeHtml(c.name)}: pendiente de cobro este mes. <button class="btn-primary integral-toggle" data-client="${c.id}" data-paid="false" style="padding:6px 14px;font-size:0.8rem;">Marcar cobrado</button></p>`;
     }
   }
   wrap.innerHTML = html;
@@ -2402,7 +2423,7 @@ async function renderNetMonth(monthKey){
 function populateAuditUserSelect(){
   const sel = document.getElementById('auditUserSelect');
   if(!sel) return;
-  sel.innerHTML = users.map(u=>`<option value="${u.name}">${u.name}</option>`).join('');
+  sel.innerHTML = users.map(u=>`<option value="${escapeHtml(u.name)}">${escapeHtml(u.name)}</option>`).join('');
 }
 
 async function runAudit(){
@@ -2413,18 +2434,18 @@ async function runAudit(){
   const entries = (await getMonthEntries(monthKey)).filter(e=>e.usuario===userName);
   const sales = (await getMonthSales(monthKey)).filter(s=>s.usuario===userName);
   if(entries.length===0 && sales.length===0){
-    wrap.innerHTML = '<p class="empty">Sin registros de '+userName+' este mes.</p>';
+    wrap.innerHTML = '<p class="empty">Sin registros de '+escapeHtml(userName)+' este mes.</p>';
     return;
   }
   const items = [];
   entries.forEach(e=>{
     const t = truckById(e.truckId) || {name:e.truckId};
-    items.push({time:e.time, texto: '🚚 Vuelta · '+t.name+' · '+(e.shift==='manana'?'Mañana':'Tarde')});
+    items.push({time:e.time, texto: '🚚 Vuelta · '+escapeHtml(t.name)+' · '+(e.shift==='manana'?'Mañana':'Tarde')});
   });
   sales.forEach(s=>{
     const m = materialById(s.materialId) || {name:s.materialId};
     const tag = s.isReturn ? '↩ Devolución' : '📦 Venta';
-    items.push({time:s.time, texto: tag+' · '+m.name+' · '+s.m3+'m³ · $'+s.total.toLocaleString('es-CL')});
+    items.push({time:s.time, texto: tag+' · '+escapeHtml(m.name)+' · '+s.m3+'m³ · $'+s.total.toLocaleString('es-CL')});
   });
   items.sort((a,b)=> new Date(b.time)-new Date(a.time));
   let html = '<table><thead><tr><th>Fecha</th><th>Detalle</th></tr></thead><tbody>';
@@ -2604,7 +2625,7 @@ async function exportSalesCsv(){
     const neto = s.neto != null ? s.neto : s.total;
     const iva = s.iva || 0;
     const b2 = s.billing || {};
-    csv += `${dateKey(d)},${d.toLocaleTimeString('es-CL')},"${m.name}",${s.m3},${s.price},${neto},${iva},${s.total},${s.payment},${s.shift},"${s.patente||''}","${b2.razonSocial||''}","${b2.rut||''}","${b2.email||''}",${s.isReturn?'SI':'NO'},"${(s.note||'').replace(/"/g,'')}"\n`;
+    csv += `${dateKey(d)},${d.toLocaleTimeString('es-CL')},${csvCell(m.name)},${s.m3},${s.price},${neto},${iva},${s.total},${s.payment},${s.shift},${csvCell(s.patente||'')},${csvCell(b2.razonSocial||'')},${csvCell(b2.rut||'')},${csvCell(b2.email||'')},${s.isReturn?'SI':'NO'},${csvCell(s.note||'')}\n`;
   });
   const blob = new Blob([csv], {type:'text/csv'});
   const url = URL.createObjectURL(blob);
@@ -2624,7 +2645,7 @@ async function refreshStatementClientOptions(){
     if(materialClients.length===0){
       sel.innerHTML = '<option value="">Sin clientes de Material integral</option>';
     }else{
-      sel.innerHTML = materialClients.map(c=>`<option value="${c.id}">${c.name}</option>`).join('');
+      sel.innerHTML = materialClients.map(c=>`<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('');
     }
     return;
   }
@@ -2673,7 +2694,7 @@ function statementHTML(clientName, monthKey, rows){
   let rowsHtml = rows.map(r=>`
     <tr>
       <td style="padding:4px 0;">${r.fecha.toLocaleDateString('es-CL')}</td>
-      <td>${r.desc}</td>
+      <td>${escapeHtml(r.desc)}</td>
       <td style="text-align:right;">${r.m3}</td>
       <td style="text-align:right;">$${Math.round(r.price).toLocaleString('es-CL')}</td>
       <td style="text-align:right;">$${Math.round(r.subtotal).toLocaleString('es-CL')}</td>
@@ -2683,7 +2704,7 @@ function statementHTML(clientName, monthKey, rows){
     <div style="padding:22px;font-family:Arial,sans-serif;">
       <img src="${LOGO_DATA_URI}" style="height:44px;display:block;margin-bottom:14px;">
       <h2 style="margin:0 0 4px;">Estado de cuenta</h2>
-      <p style="color:#555;margin:0 0 14px;text-transform:capitalize;">${clientName} · ${mesNombre}</p>
+      <p style="color:#555;margin:0 0 14px;text-transform:capitalize;">${escapeHtml(clientName)} · ${mesNombre}</p>
       <table style="width:100%;border-collapse:collapse;font-size:0.92rem;">
         <thead><tr style="border-bottom:2px solid #333;"><th style="text-align:left;padding:4px 0;">Fecha</th><th style="text-align:left;">Detalle</th><th style="text-align:right;">m³</th><th style="text-align:right;">Precio/m³</th><th style="text-align:right;">Subtotal</th></tr></thead>
         <tbody>${rowsHtml}</tbody>
@@ -2711,7 +2732,7 @@ async function downloadClientStatementCsv(){
   const {clientName, rows} = await buildStatementRows(type, clientKey, monthKey);
   let csv = 'Fecha,Detalle,M3,Precio_m3,Subtotal\n';
   rows.forEach(r=>{
-    csv += `${dateKey(r.fecha)},"${r.desc.replace(/"/g,'')}",${r.m3},${r.price},${Math.round(r.subtotal)}\n`;
+    csv += `${dateKey(r.fecha)},${csvCell(r.desc)},${r.m3},${r.price},${Math.round(r.subtotal)}\n`;
   });
   const total = rows.reduce((a,r)=>a+r.subtotal,0);
   csv += `Total,,,,${Math.round(total)}\n`;
@@ -2805,7 +2826,7 @@ async function searchByPatente(){
 
   let html = '';
   if(matchedTruck){
-    html += `<p class="muted" style="margin:0 0 8px;">Coincide con el camión propio <b>${matchedTruck.name}</b> (Material integral) — ${truckEntriesMatch.length} vuelta(s) en el historial.</p>`;
+    html += `<p class="muted" style="margin:0 0 8px;">Coincide con el camión propio <b>${escapeHtml(matchedTruck.name)}</b> (Material integral) — ${truckEntriesMatch.length} vuelta(s) en el historial.</p>`;
     if(truckEntriesMatch.length>0){
       html += '<table><thead><tr><th>Fecha</th><th class="num">Hora</th><th>Turno</th></tr></thead><tbody>';
       truckEntriesMatch.slice(0,50).forEach(e=>{
@@ -2824,7 +2845,7 @@ async function searchByPatente(){
       const d = new Date(s.time);
       const m = materialById(s.materialId) || {name:s.materialId};
       const tag = s.isReturn ? ' (devolución)' : '';
-      html += `<tr><td>${d.toLocaleDateString('es-CL')} ${d.toLocaleTimeString('es-CL',{hour:'2-digit',minute:'2-digit'})}</td><td>${m.name}${tag}</td><td class="num">${s.m3}</td><td class="num">$${Math.round(s.total).toLocaleString('es-CL')}</td></tr>`;
+      html += `<tr><td>${d.toLocaleDateString('es-CL')} ${d.toLocaleTimeString('es-CL',{hour:'2-digit',minute:'2-digit'})}</td><td>${escapeHtml(m.name)}${tag}</td><td class="num">${s.m3}</td><td class="num">$${Math.round(s.total).toLocaleString('es-CL')}</td></tr>`;
     });
     html += '</tbody></table>';
     if(salesMatch.length>50) html += `<p class="muted">Mostrando las 50 más recientes de ${salesMatch.length}.</p>`;
@@ -2840,7 +2861,7 @@ function renderMaterialEditList(){
   materials.forEach(m=>{
     const row = document.createElement('div');
     row.className = 'truck-edit-row';
-    row.innerHTML = `<span class="name">${m.name} — $${m.price.toLocaleString('es-CL')}/m³</span><button class="icon-btn" data-id="${m.id}">✕</button>`;
+    row.innerHTML = `<span class="name">${escapeHtml(m.name)} — $${m.price.toLocaleString('es-CL')}/m³</span><button class="icon-btn" data-id="${m.id}">✕</button>`;
     wrap.appendChild(row);
   });
   wrap.querySelectorAll('.icon-btn').forEach(btn=>{
@@ -2878,7 +2899,7 @@ function renderUserEditList(){
   users.forEach(u=>{
     const row = document.createElement('div');
     row.className = 'truck-edit-row';
-    row.innerHTML = `<span class="name">${u.name} <span class="muted">(${u.username} · ${u.role==='supervisor'?'Supervisor':'Portero'})</span></span><button class="icon-btn edit-user-btn" data-id="${u.id}" style="color:var(--concrete-dim);">✎</button><button class="icon-btn" data-id="${u.id}">✕</button>`;
+    row.innerHTML = `<span class="name">${escapeHtml(u.name)} <span class="muted">(${escapeHtml(u.username)} · ${u.role==='supervisor'?'Supervisor':'Portero'})</span></span><button class="icon-btn edit-user-btn" data-id="${u.id}" style="color:var(--concrete-dim);">✎</button><button class="icon-btn" data-id="${u.id}">✕</button>`;
     wrap.appendChild(row);
   });
   wrap.querySelectorAll('.edit-user-btn').forEach(btn=>{
@@ -2931,10 +2952,10 @@ function renderTruckEditList(){
   wrap.innerHTML = '';
   trucks.forEach(t=>{
     const c = materialClientById(t.clientId);
-    const patenteTxt = t.patente ? ' · <span class="muted">'+t.patente+'</span>' : '';
+    const patenteTxt = t.patente ? ' · <span class="muted">'+escapeHtml(t.patente)+'</span>' : '';
     const row = document.createElement('div');
     row.className = 'truck-edit-row';
-    row.innerHTML = `<span class="swatch-dot" style="background:${t.color}"></span><span class="name">${t.name}${patenteTxt} <span class="muted">(${c.name} · ${truckM3(t)} m³/vuelta)</span></span><button class="icon-btn edit-truck-btn" data-id="${t.id}" style="color:var(--concrete-dim);">✎</button><button class="icon-btn" data-id="${t.id}">✕</button>`;
+    row.innerHTML = `<span class="swatch-dot" style="background:${escapeHtml(t.color)}"></span><span class="name">${escapeHtml(t.name)}${patenteTxt} <span class="muted">(${escapeHtml(c.name)} · ${truckM3(t)} m³/vuelta)</span></span><button class="icon-btn edit-truck-btn" data-id="${t.id}" style="color:var(--concrete-dim);">✎</button><button class="icon-btn" data-id="${t.id}">✕</button>`;
     wrap.appendChild(row);
   });
   wrap.querySelectorAll('.edit-truck-btn').forEach(btn=>{
@@ -2970,7 +2991,7 @@ function renderTruckEditList(){
 function populateNewTruckClientSelect(){
   const sel = document.getElementById('newTruckClient');
   if(!sel) return;
-  sel.innerHTML = materialClients.map(c=>`<option value="${c.id}">${c.name}</option>`).join('');
+  sel.innerHTML = materialClients.map(c=>`<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('');
 }
 
 function startEditTruck(id){
@@ -3038,7 +3059,7 @@ function renderMaterialClientEditList(){
   materialClients.forEach(c=>{
     const row = document.createElement('div');
     row.className = 'truck-edit-row';
-    row.innerHTML = `<span class="name">${c.name} — $${(c.price||0).toLocaleString('es-CL')}/m³</span><button class="icon-btn edit-client-btn" data-id="${c.id}" style="color:var(--concrete-dim);">✎</button><button class="icon-btn" data-id="${c.id}">✕</button>`;
+    row.innerHTML = `<span class="name">${escapeHtml(c.name)} — $${(c.price||0).toLocaleString('es-CL')}/m³</span><button class="icon-btn edit-client-btn" data-id="${c.id}" style="color:var(--concrete-dim);">✎</button><button class="icon-btn" data-id="${c.id}">✕</button>`;
     wrap.appendChild(row);
   });
   wrap.querySelectorAll('.edit-client-btn').forEach(btn=>{
@@ -3378,6 +3399,14 @@ function startApp(){
     document.getElementById('setupOverlay').style.display = 'flex';
     document.getElementById('setupSaveBtn').addEventListener('click', trySetupUrl);
     document.getElementById('setupUrlInput').addEventListener('keydown', e=>{ if(e.key==='Enter') trySetupUrl(); });
+    if(SHEETS_URL_PARAM){
+      // Precarga desde el link, pero SIEMPRE pasa por la misma validación
+      // (formato + prueba de conexión) que si lo hubieras tipeado a mano.
+      document.getElementById('setupUrlInput').value = SHEETS_URL_PARAM;
+      if(/^https:\/\/script\.google\.com\/macros\/s\/.+\/exec$/.test(SHEETS_URL_PARAM)){
+        trySetupUrl();
+      }
+    }
     return;
   }
   init();
